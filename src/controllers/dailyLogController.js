@@ -125,9 +125,10 @@ const updateDailyLog = async (req, res) => {
       return apiResponse.error(res, 403, "Not authorized to update this log");
     }
 
-    const { project, description, actualHours, startDate, dueDate, priority, status, department } =
+    const { employeeName, project, description, actualHours, startDate, dueDate, priority, status, department } =
       req.body;
 
+    if (employeeName !== undefined) log.employeeName = employeeName;
     if (project !== undefined) log.project = project;
     if (description !== undefined) log.description = description;
     if (actualHours !== undefined) log.actualHours = Number(actualHours);
