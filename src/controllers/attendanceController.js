@@ -177,21 +177,159 @@ const getToday = async (req, res) => {
   }
 };
 
-// Get the logged-in user's attendance for a given month
+// Get attendance for a given month or date range (supports employeeId for admin)
 const getMonth = async (req, res) => {
   try {
-    const { month, year } = req.query;
-    if (!month || !year) {
-      return apiResponse.error(res, 400, "month and year are required");
+    const { month, year, employeeId, range, startDate: queryStart, endDate: queryEnd } = req.query;
+
+    const targetUserId = (req.user.role === "admin" && employeeId) ? employeeId : req.user._id;
+
+    let startDate = queryStart;
+    let endDate = queryEnd;
+
+    if (!startDate || !endDate) {
+      if (!month || !year) {
+        return apiResponse.error(res, 400, "month and year, or startDate and endDate are required");
+      }
+      const parsedMonth = parseInt(month, 10);
+      const parsedYear = parseInt(year, 10);
+      const prefix = `${parsedYear}-${String(parsedMonth).padStart(2, "0")}`;
+      startDate = `${prefix}-01`;
+      const daysInMonth = new Date(parsedYear, parsedMonth, 0).getDate();
+      endDate = `${prefix}-${String(daysInMonth).padStart(2, "0")}`;
     }
 
-    const prefix = `${year}-${String(month).padStart(2, "0")}`;
-    const records = await Attendance.find({
-      employee: req.user._id,
-      date: { $regex: `^${prefix}` },
-    }).sort({ date: 1 });
+    const todayStr = getTodayDateString();
 
-    return apiResponse.success(res, 200, "Month attendance fetched", records);
+    const [attendanceRecords, leaves, holidays] = await Promise.all([
+      Attendance.find({
+        employee: targetUserId,
+        date: { $gte: startDate, $lte: endDate },
+      }).sort({ date: 1 }),
+      Leave.find({
+        employee: targetUserId,
+        status: "approved",
+        startDate: { $lte: endDate },
+        endDate: { $gte: startDate },
+      }).sort({ startDate: 1 }),
+      Holiday.find({
+        isActive: true,
+        type: { $ne: "floating" },
+        date: { $gte: startDate, $lte: endDate },
+      }).sort({ date: 1 }),
+    ]);
+
+    // Build map for quick lookup
+    const attendanceMap = new Map();
+    attendanceRecords.forEach((rec) => {
+      attendanceMap.set(rec.date, rec);
+    });
+
+    const holidayMap = new Map();
+    holidays.forEach((h) => {
+      holidayMap.set(h.date, h);
+    });
+
+    // Helper to check if date falls in approved leaves
+    const getLeaveForDate = (dateStr) => {
+      return leaves.find((l) => l.startDate <= dateStr && l.endDate >= dateStr);
+    };
+
+    // Iterate through all days in [startDate, endDate]
+    const allRecords = [];
+    let present = 0;
+    let absent = 0;
+    let leave = 0;
+    let halfDay = 0;
+    let workingDays = 0;
+
+    const startD = new Date(`${startDate}T00:00:00`);
+    const endD = new Date(`${endDate}T00:00:00`);
+
+    for (let cur = new Date(startD); cur <= endD; cur.setDate(cur.getDate() + 1)) {
+      const y = cur.getFullYear();
+      const m = String(cur.getMonth() + 1).padStart(2, "0");
+      const d = String(cur.getDate()).padStart(2, "0");
+      const dateStr = `${y}-${m}-${d}`;
+
+      const isSunday = cur.getDay() === 0;
+      const isHoliday = holidayMap.has(dateStr);
+      const isWorkDay = !isSunday && !isHoliday;
+
+      if (isWorkDay) {
+        workingDays += 1;
+      }
+
+      const att = attendanceMap.get(dateStr);
+      const matchedLeave = getLeaveForDate(dateStr);
+
+      let status = "";
+      let checkIn = att ? att.checkIn : null;
+      let checkOut = att ? att.checkOut : null;
+      let breaks = att ? att.breaks : [];
+
+      if (att) {
+        const attStatus = String(att.status || "").toLowerCase();
+        if (attStatus === "half day" || attStatus === "half-day") {
+          status = "Half Day";
+          halfDay += 1;
+        } else {
+          status = "Present";
+          present += 1;
+        }
+      } else if (matchedLeave) {
+        status = "Leave";
+        leave += 1;
+      } else if (isSunday) {
+        status = "Weekend";
+      } else if (isHoliday) {
+        status = "Holiday";
+      } else if (dateStr <= todayStr) {
+        status = "Absent";
+        absent += 1;
+      } else {
+        status = "Upcoming";
+      }
+
+      allRecords.push({
+        _id: att ? att._id : `${targetUserId}-${dateStr}`,
+        employee: targetUserId,
+        date: dateStr,
+        checkIn,
+        checkOut,
+        breaks,
+        status,
+      });
+    }
+
+    const attendancePercentage =
+      workingDays > 0
+        ? Math.min(100, Math.round(((present + halfDay * 0.5) / workingDays) * 100))
+        : 0;
+
+    const summary = {
+      present,
+      absent,
+      leave,
+      halfDay,
+      workingDays,
+      total: present + absent + leave + halfDay,
+      attendancePercentage,
+    };
+
+    // If regular user or legacy call without employeeId/range, return simple array for backwards compatibility
+    if (!employeeId && !range && !queryStart) {
+      return apiResponse.success(res, 200, "Month attendance fetched", attendanceRecords);
+    }
+
+    return apiResponse.success(res, 200, "Month attendance fetched", {
+      records: allRecords,
+      rawAttendance: attendanceRecords,
+      leaves,
+      holidays,
+      summary,
+      workingDays,
+    });
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }
@@ -202,7 +340,9 @@ const getMonth = async (req, res) => {
 // All dates are "YYYY-MM-DD" strings, so range checks are safe string comparisons.
 const getCalendar = async (req, res) => {
   try {
-    const { month, year } = req.query;
+    const { month, year, employeeId } = req.query;
+    const targetUserId = (req.user.role === "admin" && employeeId) ? employeeId : req.user._id;
+
     const parsedMonth = parseInt(month, 10);
     const parsedYear = parseInt(year, 10);
     if (
@@ -221,11 +361,11 @@ const getCalendar = async (req, res) => {
 
     const [records, leaves, holidays] = await Promise.all([
       Attendance.find({
-        employee: req.user._id,
+        employee: targetUserId,
         date: { $regex: `^${prefix}` },
       }).sort({ date: 1 }),
       Leave.find({
-        employee: req.user._id,
+        employee: targetUserId,
         status: "approved",
         startDate: { $lte: monthEnd },
         endDate: { $gte: monthStart },
