@@ -229,7 +229,7 @@ const seedData = async () => {
           actualHours: 5,
           project: "Abe",
           description: "Secured Horizon - 01-08-2026.docx",
-          isDocLink: true,
+         
           startDate: "1-Aug-2026",
           dueDate: "1-Aug-2026",
           priority: "High",
@@ -270,7 +270,7 @@ const seedData = async () => {
           actualHours: 2,
           project: "Abe",
           description: "Secured Horizon - 03/08/2026",
-          isDocLink: true,
+         
           startDate: "3-Aug-2026",
           dueDate: "3-Aug-2026",
           priority: "High",

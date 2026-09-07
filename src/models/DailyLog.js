@@ -55,10 +55,6 @@ const dailyLogSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    isDocLink: {
-      type: Boolean,
-      default: false,
-    },
   },
   { timestamps: true }
 );
