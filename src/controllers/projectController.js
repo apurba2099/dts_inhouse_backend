@@ -231,10 +231,17 @@ const getProjectLogs = async (req, res) => {
 
     if (search && search.trim()) {
       const regex = new RegExp(search.trim(), "i");
-      const searchConditions = [
-        { employeeName: regex },
-        { description: regex },
-      ];
+      // Find matching employees for search
+      const matchingEmployees = await User.find({
+        $or: [{ name: regex }, { email: regex }, { employeeId: regex }],
+      }).select("_id");
+      const matchedEmpIds = matchingEmployees.map((e) => e._id);
+
+      const searchConditions = [{ description: regex }, { department: regex }];
+      if (matchedEmpIds.length > 0) {
+        searchConditions.push({ employee: { $in: matchedEmpIds } });
+      }
+
       if (filter.$or) {
         filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
         delete filter.$or;
@@ -250,12 +257,16 @@ const getProjectLogs = async (req, res) => {
 
     const logs = rawLogs.map((logDoc) => {
       const l = logDoc.toObject();
+      const empName = l.employee?.name || "";
+      const projName = l.project?.name || project.name || "";
       return {
         ...l,
+        employeeName: empName,
+        projectName: projName,
+        project: projName,
         startDate: l.startDate || l.date,
         dueDate: l.dueDate || l.date,
         priority: l.priority || "Medium",
-        project: l.projectName || (l.project && l.project.name) || project.name,
       };
     });
 
@@ -305,9 +316,7 @@ const createProjectLog = async (req, res) => {
 
     const log = await ProjectLog.create({
       project: project._id,
-      projectName: project.name,
       employee: targetEmployee._id,
-      employeeName: targetEmployee.name,
       color: color || "blue",
       date: logDate,
       startDate: startDate || logDate,
@@ -324,7 +333,9 @@ const createProjectLog = async (req, res) => {
       .populate("project", "name description");
 
     const result = populated ? populated.toObject() : log.toObject();
-    result.project = result.projectName || result.project?.name;
+    result.employeeName = result.employee?.name || "";
+    result.projectName = result.project?.name || project.name || "";
+    result.project = result.project?.name || project.name || "";
 
     return apiResponse.success(res, 201, "Project log created successfully", result);
   } catch (err) {
@@ -354,10 +365,8 @@ const updateProjectLog = async (req, res) => {
       dueDate,
       priority,
       department,
-      employeeName,
     } = req.body;
 
-    if (employeeName !== undefined) log.employeeName = employeeName;
     if (description !== undefined) log.description = description.trim();
     if (actualHours !== undefined) log.actualHours = Number(actualHours);
     if (status !== undefined) log.status = status;
@@ -374,7 +383,9 @@ const updateProjectLog = async (req, res) => {
       .populate("project", "name description");
 
     const result = populated ? populated.toObject() : log.toObject();
-    result.project = result.projectName || result.project?.name;
+    result.employeeName = result.employee?.name || "";
+    result.projectName = result.project?.name || "";
+    result.project = result.project?.name || "";
 
     return apiResponse.success(res, 200, "Project log updated successfully", result);
   } catch (err) {

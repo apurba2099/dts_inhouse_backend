@@ -3,7 +3,6 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const Project = require("../models/Project");
 const ProjectLog = require("../models/ProjectLog");
-const DailyLog = require("../models/DailyLog");
 const { mongoUri } = require("../config/env");
 const logger = require("../config/logger");
 
@@ -54,9 +53,7 @@ const seedData = async () => {
       const sampleProjectLogs = [
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Created account flow wireframes and user journey mapping",
           actualHours: 3,
@@ -64,9 +61,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Designed homepage layout and hero section",
           actualHours: 2,
@@ -74,9 +69,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Developed responsive header and navigation menu",
           actualHours: 2.5,
@@ -84,9 +77,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Integrated contact form with backend API",
           actualHours: 1.5,
@@ -94,9 +85,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Fixed mobile view alignment issues on services page",
           actualHours: 1,
@@ -104,9 +93,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Optimized images and improved page load speed",
           actualHours: 1,
@@ -114,9 +101,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Tested form validation and error handling",
           actualHours: 1.5,
@@ -124,9 +109,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Added meta tags and updated page SEO",
           actualHours: 1,
@@ -134,9 +117,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Cross-browser testing and bug fixes",
           actualHours: 1,
@@ -144,9 +125,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Client review and feedback implementation",
           actualHours: 2,
@@ -154,9 +133,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Final UI adjustments and responsiveness check",
           actualHours: 1.5,
@@ -164,9 +141,7 @@ const seedData = async () => {
         },
         {
           project: p1._id,
-          projectName: p1.name,
           employee: admin._id,
-          employeeName: admin.name,
           date: "31-May-2025",
           description: "Project documentation and changelog update",
           actualHours: 1,
@@ -178,17 +153,35 @@ const seedData = async () => {
       logger.info("Project logs seeded successfully.");
     }
 
-    // 2. Seed Daily Logs if none exist
-    const dailyLogCount = await DailyLog.countDocuments();
-    if (dailyLogCount === 0) {
+    // 2. Seed Daily Logs (into ProjectLog) if none exist
+    const dailyLogCount = await ProjectLog.countDocuments({ project: { $ne: null } });
+    // If only the project logs were seeded or no logs exist for other projects
+    const existingLogCount = await ProjectLog.countDocuments();
+    if (existingLogCount <= 12) {
+      // Find or create projects corresponding to the daily log sample projects
+      const projectNames = ["Yaarin", "recardo", "Abe", "Angela", "dts hr system"];
+      const projectMap = {};
+      for (const pName of projectNames) {
+        let proj = await Project.findOne({ name: { $regex: new RegExp("^" + pName + "$", "i") } });
+        if (!proj) {
+          proj = await Project.create({
+            name: pName,
+            description: `${pName} Project`,
+            members: [admin._id],
+            createdBy: admin._id,
+          });
+        }
+        projectMap[pName] = proj._id;
+      }
+
       const sampleDailyLogs = [
         {
+          project: projectMap["Yaarin"],
           employee: admin._id,
-          employeeName: "Apurba Dutta",
           color: "blue",
           actualHours: 5,
-          project: "Yaarin",
           description: "Agency account work - snapshots, creation account, Business csv handlel",
+          date: "1-Aug-2026",
           startDate: "1-Aug-2026",
           dueDate: "1-Aug-2026",
           priority: "High",
@@ -196,12 +189,12 @@ const seedData = async () => {
           department: "Engineering",
         },
         {
+          project: projectMap["recardo"],
           employee: admin._id,
-          employeeName: "Sayan De",
           color: "teal",
           actualHours: 8,
-          project: "recardo",
           description: "working on banner section design and sponser dashboard",
+          date: "1-Aug-2026",
           startDate: "1-Aug-2026",
           dueDate: "1-Aug-2026",
           priority: "High",
@@ -209,13 +202,13 @@ const seedData = async () => {
           department: "Design",
         },
         {
+          project: projectMap["Abe"],
           employee: admin._id,
-          employeeName: "Purba Choudhury",
           color: "cyan",
           actualHours: 8,
-          project: "Abe",
           description:
             "Today I worked on updating the landing page as per the requirements that were shared with me, making sure everything matches what was discussed.",
+          date: "1-Aug-2026",
           startDate: "1-Aug-2026",
           dueDate: "1-Aug-2026",
           priority: "High",
@@ -223,13 +216,12 @@ const seedData = async () => {
           department: "Engineering",
         },
         {
+          project: projectMap["Abe"],
           employee: admin._id,
-          employeeName: "Soham Goswami",
           color: "indigo",
           actualHours: 5,
-          project: "Abe",
           description: "Secured Horizon - 01-08-2026.docx",
-         
+          date: "1-Aug-2026",
           startDate: "1-Aug-2026",
           dueDate: "1-Aug-2026",
           priority: "High",
@@ -237,12 +229,12 @@ const seedData = async () => {
           department: "QA",
         },
         {
+          project: projectMap["Abe"],
           employee: admin._id,
-          employeeName: "Bijay Kar",
           color: "pink",
           actualHours: 4,
-          project: "Abe",
           description: "Feedback updated",
+          date: "1-Aug-2026",
           startDate: "1-Aug-2026",
           dueDate: "1-Aug-2026",
           priority: "High",
@@ -250,13 +242,13 @@ const seedData = async () => {
           department: "Engineering",
         },
         {
+          project: projectMap["Angela"],
           employee: admin._id,
-          employeeName: "Tushar Saha",
           color: "tealDark",
           actualHours: 9,
-          project: "Angela",
           description:
             "Stephen Terebeniec: Configured the Consultation No Show workflow and updated the new pipeline actions (disabled for review).\nJessica Kovacovich: Reviewed automations, identified missing workflows, and verified the email automation.\nEdward Vinson: Configured pipeline trigger automations (currently in Draft for review).",
+          date: "3-Aug-2026",
           startDate: "3-Aug-2026",
           dueDate: "3-Aug-2026",
           priority: "High",
@@ -264,13 +256,12 @@ const seedData = async () => {
           department: "Operations",
         },
         {
+          project: projectMap["Abe"],
           employee: admin._id,
-          employeeName: "Soham Goswami",
           color: "indigo",
           actualHours: 2,
-          project: "Abe",
           description: "Secured Horizon - 03/08/2026",
-         
+          date: "3-Aug-2026",
           startDate: "3-Aug-2026",
           dueDate: "3-Aug-2026",
           priority: "High",
@@ -278,12 +269,12 @@ const seedData = async () => {
           department: "QA",
         },
         {
+          project: projectMap["Abe"],
           employee: admin._id,
-          employeeName: "Bijay Kar",
           color: "pink",
           actualHours: 6,
-          project: "Abe",
           description: "Feedback updated, video popup, new loan program",
+          date: "3-Aug-2026",
           startDate: "3-Aug-2026",
           dueDate: "3-Aug-2026",
           priority: "High",
@@ -291,12 +282,12 @@ const seedData = async () => {
           department: "Engineering",
         },
         {
+          project: projectMap["recardo"],
           employee: admin._id,
-          employeeName: "Sayan De",
           color: "teal",
           actualHours: 8,
-          project: "recardo",
           description: "working on sponser section opportunities section crud",
+          date: "3-Aug-2026",
           startDate: "3-Aug-2026",
           dueDate: "3-Aug-2026",
           priority: "High",
@@ -304,13 +295,13 @@ const seedData = async () => {
           department: "Design",
         },
         {
+          project: projectMap["dts hr system"],
           employee: admin._id,
-          employeeName: "Abhrajyoti Patra",
           color: "purple",
           actualHours: 8,
-          project: "dts hr system",
           description:
             "Added employee profile management — edit name, nickname, phone, biography, and profile picture (via ImageKit).",
+          date: "3-Aug-2026",
           startDate: "3-Aug-2026",
           dueDate: "3-Aug-2026",
           priority: "High",
@@ -319,8 +310,8 @@ const seedData = async () => {
         },
       ];
 
-      await DailyLog.insertMany(sampleDailyLogs);
-      logger.info("Daily logs seeded successfully.");
+      await ProjectLog.insertMany(sampleDailyLogs);
+      logger.info("Daily logs seeded into ProjectLog successfully.");
     }
 
     logger.info("Seeding finished successfully.");

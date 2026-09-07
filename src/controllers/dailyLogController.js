@@ -64,9 +64,7 @@ const createDailyLog = async (req, res) => {
 
     const log = await ProjectLog.create({
       project: targetProject._id,
-      projectName: targetProject.name,
       employee: targetEmployee._id,
-      employeeName: targetEmployee.name,
       color: color || "blue",
       description: description.trim(),
       actualHours: Number(actualHours) || 8,
@@ -83,7 +81,9 @@ const createDailyLog = async (req, res) => {
       .populate("project", "name description");
 
     const result = populated ? populated.toObject() : log.toObject();
-    result.project = result.projectName || result.project?.name;
+    result.employeeName = result.employee?.name || "";
+    result.projectName = result.project?.name || "";
+    result.project = result.project?.name || "";
 
     return apiResponse.success(res, 201, "Daily log created successfully", result);
   } catch (err) {
@@ -108,10 +108,13 @@ const getDailyLogs = async (req, res) => {
 
     if (employeeId && employeeId !== "All Employees") {
       filter.employee = employeeId;
-    }
-
-    if (employeeName && employeeName !== "All Employees") {
-      filter.employeeName = employeeName;
+    } else if (employeeName && employeeName !== "All Employees") {
+      // Find matching users by name and filter by their ObjectIds
+      const matchingUsers = await User.find({
+        name: { $regex: new RegExp("^" + employeeName.trim() + "$", "i") },
+      }).select("_id");
+      const userIds = matchingUsers.map((u) => u._id);
+      filter.employee = { $in: userIds };
     }
 
     if (priority && priority !== "All Priority") {
@@ -135,12 +138,29 @@ const getDailyLogs = async (req, res) => {
 
     if (search && search.trim()) {
       const regex = new RegExp(search.trim(), "i");
+      // Find matching user and project IDs for search
+      const [matchingEmployees, matchingProjects] = await Promise.all([
+        User.find({
+          $or: [{ name: regex }, { email: regex }, { employeeId: regex }],
+        }).select("_id"),
+        Project.find({ name: regex }).select("_id"),
+      ]);
+
+      const matchedEmpIds = matchingEmployees.map((e) => e._id);
+      const matchedProjIds = matchingProjects.map((p) => p._id);
+
       const searchConditions = [
-        { employeeName: regex },
-        { projectName: regex },
         { description: regex },
         { department: regex },
       ];
+
+      if (matchedEmpIds.length > 0) {
+        searchConditions.push({ employee: { $in: matchedEmpIds } });
+      }
+      if (matchedProjIds.length > 0) {
+        searchConditions.push({ project: { $in: matchedProjIds } });
+      }
+
       if (filter.$or) {
         filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
         delete filter.$or;
@@ -157,12 +177,16 @@ const getDailyLogs = async (req, res) => {
     // Ensure format matches frontend expectations
     const logs = rawLogs.map((logDoc) => {
       const l = logDoc.toObject();
+      const empName = l.employee?.name || "";
+      const projName = l.project?.name || "";
       return {
         ...l,
+        employeeName: empName,
+        projectName: projName,
+        project: projName,
         startDate: l.startDate || l.date,
         dueDate: l.dueDate || l.date,
         priority: l.priority || "Medium",
-        project: l.projectName || (l.project && l.project.name) || "",
       };
     });
 
@@ -176,17 +200,22 @@ const getDailyLogs = async (req, res) => {
 const getMyDailyLogs = async (req, res) => {
   try {
     const rawLogs = await ProjectLog.find({ employee: req.user._id })
+      .populate("employee", "name email employeeId department designation")
       .populate("project", "name description")
       .sort({ createdAt: -1 });
 
     const logs = rawLogs.map((logDoc) => {
       const l = logDoc.toObject();
+      const empName = l.employee?.name || req.user.name || "";
+      const projName = l.project?.name || "";
       return {
         ...l,
+        employeeName: empName,
+        projectName: projName,
+        project: projName,
         startDate: l.startDate || l.date,
         dueDate: l.dueDate || l.date,
         priority: l.priority || "Medium",
-        project: l.projectName || (l.project && l.project.name) || "",
       };
     });
 
@@ -209,7 +238,6 @@ const updateDailyLog = async (req, res) => {
     }
 
     const {
-      employeeName,
       project,
       projectId,
       description,
@@ -222,7 +250,6 @@ const updateDailyLog = async (req, res) => {
       date,
     } = req.body;
 
-    if (employeeName !== undefined) log.employeeName = employeeName;
     if (description !== undefined) log.description = description.trim();
     if (actualHours !== undefined) log.actualHours = Number(actualHours);
     if (startDate !== undefined) log.startDate = startDate;
@@ -236,10 +263,8 @@ const updateDailyLog = async (req, res) => {
       const foundProject = await Project.findById(projectId);
       if (foundProject) {
         log.project = foundProject._id;
-        log.projectName = foundProject.name;
       }
-    } else if (project !== undefined && project !== log.projectName) {
-      log.projectName = project;
+    } else if (project !== undefined) {
       const foundProject = await Project.findOne({
         name: { $regex: new RegExp("^" + project.trim() + "$", "i") },
       });
@@ -255,7 +280,9 @@ const updateDailyLog = async (req, res) => {
       .populate("project", "name description");
 
     const result = populated ? populated.toObject() : log.toObject();
-    result.project = result.projectName || result.project?.name;
+    result.employeeName = result.employee?.name || "";
+    result.projectName = result.project?.name || "";
+    result.project = result.project?.name || "";
 
     return apiResponse.success(res, 200, "Daily log updated successfully", result);
   } catch (err) {

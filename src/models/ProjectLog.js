@@ -7,20 +7,10 @@ const projectLogSchema = new mongoose.Schema(
       ref: "Project",
       required: true,
     },
-    projectName: {
-      type: String,
-      required: true,
-      trim: true,
-    },
     employee: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-    },
-    employeeName: {
-      type: String,
-      required: true,
-      trim: true,
     },
     date: {
       type: String,
