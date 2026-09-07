@@ -23,6 +23,11 @@ const projectSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    status: {
+      type: String,
+      enum: ["Active", "Inactive", "Canceled", "Cancelled"],
+      default: "Active",
+    },
     isActive: {
       type: Boolean,
       default: true,

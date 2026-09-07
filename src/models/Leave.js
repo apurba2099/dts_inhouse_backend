@@ -9,9 +9,7 @@ const leaveSchema = new mongoose.Schema(
     },
     leaveType: {
       type: String,
-      // "Floating Holiday": avails one of the 2 optional/floating holidays
-      // per calendar year (date must match an active floating holiday).
-      enum: ["Casual", "Sick", "Emergency", "Earned", "Floating Holiday"],
+      enum: ["Casual", "Sick"],
       default: "Casual",
     },
     startDate: {

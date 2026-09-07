@@ -1,4 +1,7 @@
 // Run once: node src/utils/seedAdmin.js
+// Run once: node src/utils/seedHolidays.js
+// Run once: node src/utils/seedDailyLogs.js
+
 require("dotenv").config();
 const mongoose = require("mongoose");
 const User = require("../models/User");

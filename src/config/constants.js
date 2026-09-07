@@ -17,14 +17,9 @@ module.exports = {
   LEAVE_TYPES: {
     CASUAL: "Casual",
     SICK: "Sick",
-    EMERGENCY: "Emergency",
-    EARNED: "Earned",
-    FLOATING_HOLIDAY: "Floating Holiday",
   },
   // Annual leave entitlements per calendar year (days)
   LEAVE_ENTITLEMENTS: {
-    EARNED: 7,
-    SICK: 4,
-    FLOATING_HOLIDAY: 2,
+    TOTAL: 12,
   },
 };

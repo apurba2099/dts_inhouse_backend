@@ -4,20 +4,46 @@ const User = require("../models/User");
 const apiResponse = require("../utils/apiResponse");
 const { createNotification } = require("../services/notification.service");
 
-// Get all projects (Admin gets all, Employee gets only projects they belong to)
+// Get all projects (Admin gets all with status filter, Employee gets only active projects they belong to)
 const getProjects = async (req, res) => {
   try {
-    let filter = { isActive: true };
+    const { status, search, activeOnly } = req.query;
+    let filter = {};
+
     if (req.user.role !== "admin") {
+      filter.isActive = true;
       filter.members = req.user._id;
+    } else {
+      // Admin
+      if (activeOnly === "true") {
+        filter.isActive = true;
+      } else if (status && status !== "All" && status !== "All Status") {
+        filter.$or = [{ status: status }, status === "Active" ? { isActive: true } : { isActive: false }];
+      }
+      if (search && search.trim()) {
+        const regex = new RegExp(search.trim(), "i");
+        const searchCondition = [{ name: regex }, { description: regex }];
+        if (filter.$or) {
+          filter.$and = [{ $or: filter.$or }, { $or: searchCondition }];
+          delete filter.$or;
+        } else {
+          filter.$or = searchCondition;
+        }
+      }
     }
 
     const projects = await Project.find(filter)
-      .populate("members", "name email employeeId department designation")
+      .populate("members", "name email employeeId department designation profilePicture")
       .populate("createdBy", "name email")
       .sort({ createdAt: -1 });
 
-    return apiResponse.success(res, 200, "Projects fetched successfully", projects);
+    const formatted = projects.map((p) => {
+      const obj = p.toObject();
+      obj.status = obj.status || (obj.isActive ? "Active" : "Inactive");
+      return obj;
+    });
+
+    return apiResponse.success(res, 200, "Projects fetched successfully", formatted);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }
@@ -26,7 +52,7 @@ const getProjects = async (req, res) => {
 // Admin: Create a new Project
 const createProject = async (req, res) => {
   try {
-    const { name, description, memberIds } = req.body;
+    const { name, description, memberIds, status } = req.body;
     if (!name || !name.trim()) {
       return apiResponse.error(res, 400, "Project name is required");
     }
@@ -37,11 +63,15 @@ const createProject = async (req, res) => {
     }
 
     const members = Array.isArray(memberIds) && memberIds.length > 0 ? memberIds : [req.user._id];
+    const projectStatus = status || "Active";
+    const isActive = projectStatus === "Active";
 
     const project = await Project.create({
       name: name.trim(),
       description: (description || "").trim(),
       members,
+      status: projectStatus,
+      isActive,
       createdBy: req.user._id,
     });
 
@@ -64,7 +94,7 @@ const createProject = async (req, res) => {
 
     const populated = await Project.findById(project._id).populate(
       "members",
-      "name email employeeId department designation"
+      "name email employeeId department designation profilePicture"
     );
 
     return apiResponse.success(res, 201, "Project created successfully", populated);
@@ -76,7 +106,7 @@ const createProject = async (req, res) => {
 // Admin: Update Project Details
 const updateProject = async (req, res) => {
   try {
-    const { name, description, isActive } = req.body;
+    const { name, description, isActive, status } = req.body;
     const project = await Project.findById(req.params.id);
     if (!project) {
       return apiResponse.error(res, 404, "Project not found");
@@ -84,10 +114,21 @@ const updateProject = async (req, res) => {
 
     if (name !== undefined) project.name = name.trim();
     if (description !== undefined) project.description = description.trim();
-    if (isActive !== undefined) project.isActive = isActive;
+    if (status !== undefined) {
+      project.status = status;
+      project.isActive = status === "Active" || status === "active";
+    } else if (isActive !== undefined) {
+      project.isActive = isActive;
+      project.status = isActive ? "Active" : "Inactive";
+    }
 
     await project.save();
-    return apiResponse.success(res, 200, "Project updated successfully", project);
+
+    const populated = await Project.findById(project._id)
+      .populate("members", "name email employeeId department designation profilePicture")
+      .populate("createdBy", "name email");
+
+    return apiResponse.success(res, 200, "Project updated successfully", populated || project);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }
@@ -126,7 +167,7 @@ const addProjectMember = async (req, res) => {
 
     const populated = await Project.findById(project._id).populate(
       "members",
-      "name email employeeId department designation"
+      "name email employeeId department designation profilePicture"
     );
     return apiResponse.success(res, 200, "Member added to project", populated);
   } catch (err) {
@@ -148,7 +189,7 @@ const removeProjectMember = async (req, res) => {
 
     const populated = await Project.findById(project._id).populate(
       "members",
-      "name email employeeId department designation"
+      "name email employeeId department designation profilePicture"
     );
     return apiResponse.success(res, 200, "Member removed from project", populated);
   } catch (err) {
@@ -169,16 +210,54 @@ const getProjectLogs = async (req, res) => {
       return apiResponse.error(res, 403, "You are not assigned to this project");
     }
 
-    const { date, employeeId, status } = req.query;
+    const { date, employeeId, status, from, to, priority, search } = req.query;
     const filter = { project: id };
 
     if (date) filter.date = date;
-    if (status && status !== "All") filter.status = status;
-    if (employeeId && employeeId !== "All") filter.employee = employeeId;
+    if (from && to) {
+      filter.$or = [
+        { startDate: { $gte: from, $lte: to } },
+        { date: { $gte: from, $lte: to } },
+      ];
+    } else if (from) {
+      filter.$or = [{ startDate: { $gte: from } }, { date: { $gte: from } }];
+    } else if (to) {
+      filter.$or = [{ startDate: { $lte: to } }, { date: { $lte: to } }];
+    }
 
-    const logs = await ProjectLog.find(filter)
-      .populate("employee", "name email employeeId")
-      .sort({ createdAt: 1 });
+    if (status && status !== "All" && status !== "All Status") filter.status = status;
+    if (priority && priority !== "All" && priority !== "All Priority") filter.priority = priority;
+    if (employeeId && employeeId !== "All" && employeeId !== "All Employees") filter.employee = employeeId;
+
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), "i");
+      const searchConditions = [
+        { employeeName: regex },
+        { description: regex },
+      ];
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
+        delete filter.$or;
+      } else {
+        filter.$or = searchConditions;
+      }
+    }
+
+    const rawLogs = await ProjectLog.find(filter)
+      .populate("employee", "name email employeeId department designation")
+      .populate("project", "name description")
+      .sort({ createdAt: -1 });
+
+    const logs = rawLogs.map((logDoc) => {
+      const l = logDoc.toObject();
+      return {
+        ...l,
+        startDate: l.startDate || l.date,
+        dueDate: l.dueDate || l.date,
+        priority: l.priority || "Medium",
+        project: l.projectName || (l.project && l.project.name) || project.name,
+      };
+    });
 
     return apiResponse.success(res, 200, "Project logs fetched successfully", logs);
   } catch (err) {
@@ -199,7 +278,18 @@ const createProjectLog = async (req, res) => {
       return apiResponse.error(res, 403, "You are not assigned to this project");
     }
 
-    const { description, actualHours, date, status, employeeId } = req.body;
+    const {
+      description,
+      actualHours,
+      date,
+      startDate,
+      dueDate,
+      priority,
+      status,
+      employeeId,
+      department,
+      color,
+    } = req.body;
 
     if (!description || !description.trim()) {
       return apiResponse.error(res, 400, "Description is required");
@@ -211,23 +301,32 @@ const createProjectLog = async (req, res) => {
       if (found) targetEmployee = found;
     }
 
+    const logDate = date || startDate || new Date().toISOString().split("T")[0];
+
     const log = await ProjectLog.create({
       project: project._id,
       projectName: project.name,
       employee: targetEmployee._id,
       employeeName: targetEmployee.name,
-      date: date || new Date().toISOString().split("T")[0],
+      color: color || "blue",
+      date: logDate,
+      startDate: startDate || logDate,
+      dueDate: dueDate || logDate,
+      priority: priority || "High",
       description: description.trim(),
       actualHours: Number(actualHours) || 1,
       status: status || "In Progress",
+      department: department || targetEmployee.department || "Engineering",
     });
 
-    const populated = await ProjectLog.findById(log._id).populate(
-      "employee",
-      "name email employeeId"
-    );
+    const populated = await ProjectLog.findById(log._id)
+      .populate("employee", "name email employeeId department designation")
+      .populate("project", "name description");
 
-    return apiResponse.success(res, 201, "Project log created successfully", populated || log);
+    const result = populated ? populated.toObject() : log.toObject();
+    result.project = result.projectName || result.project?.name;
+
+    return apiResponse.success(res, 201, "Project log created successfully", result);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }
@@ -246,15 +345,38 @@ const updateProjectLog = async (req, res) => {
       return apiResponse.error(res, 403, "Not authorized to edit this log");
     }
 
-    const { description, actualHours, status, date } = req.body;
+    const {
+      description,
+      actualHours,
+      status,
+      date,
+      startDate,
+      dueDate,
+      priority,
+      department,
+      employeeName,
+    } = req.body;
 
+    if (employeeName !== undefined) log.employeeName = employeeName;
     if (description !== undefined) log.description = description.trim();
     if (actualHours !== undefined) log.actualHours = Number(actualHours);
     if (status !== undefined) log.status = status;
     if (date !== undefined) log.date = date;
+    if (startDate !== undefined) log.startDate = startDate;
+    if (dueDate !== undefined) log.dueDate = dueDate;
+    if (priority !== undefined) log.priority = priority;
+    if (department !== undefined) log.department = department;
 
     await log.save();
-    return apiResponse.success(res, 200, "Project log updated successfully", log);
+
+    const populated = await ProjectLog.findById(log._id)
+      .populate("employee", "name email employeeId department designation")
+      .populate("project", "name description");
+
+    const result = populated ? populated.toObject() : log.toObject();
+    result.project = result.projectName || result.project?.name;
+
+    return apiResponse.success(res, 200, "Project log updated successfully", result);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }

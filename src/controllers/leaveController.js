@@ -1,10 +1,7 @@
 const Leave = require("../models/Leave");
-const Holiday = require("../models/Holiday");
+// const Holiday = require("../models/Holiday");
 const apiResponse = require("../utils/apiResponse");
-const {
-  LEAVE_TYPES,
-  LEAVE_ENTITLEMENTS,
-} = require("../config/constants");
+const { LEAVE_ENTITLEMENTS } = require("../config/constants");
 const { istTodayString } = require("../utils/istDate");
 const {
   createNotification,
@@ -22,15 +19,6 @@ const countDaysInYear = (startDate, endDate, year) => {
   return Math.round(ms / 86400000) + 1;
 };
 
-// Approved + pending Floating Holiday requests for one employee in a year
-const countFloatingRequests = async (employeeId, year, extraFilter = {}) =>
-  Leave.countDocuments({
-    employee: employeeId,
-    leaveType: LEAVE_TYPES.FLOATING_HOLIDAY,
-    status: { $in: ["pending", "approved"] },
-    startDate: { $gte: `${year}-01-01`, $lte: `${year}-12-31` },
-    ...extraFilter,
-  });
 
 // Employee: submit a new leave request
 const createLeave = async (req, res) => {
@@ -45,58 +33,15 @@ const createLeave = async (req, res) => {
       return apiResponse.error(res, 400, "End date cannot be before start date");
     }
 
-    // Floating Holiday specific validation (server-side enforcement so the
-    // 2-per-year limit cannot be bypassed via direct API calls)
-    if (leaveType === LEAVE_TYPES.FLOATING_HOLIDAY) {
-      if (startDate !== endDate) {
-        return apiResponse.error(
-          res,
-          400,
-          "A Floating Holiday request must be for a single day"
-        );
-      }
-
-      const holiday = await Holiday.findOne({
-        date: startDate,
-        isActive: true,
-        type: "floating",
-      });
-      if (!holiday) {
-        return apiResponse.error(
-          res,
-          400,
-          "The selected date is not an available Floating Holiday"
-        );
-      }
-
-      const year = Number(startDate.split("-")[0]);
-      const duplicate = await Leave.exists({
-        employee: req.user._id,
-        leaveType: LEAVE_TYPES.FLOATING_HOLIDAY,
-        status: { $in: ["pending", "approved"] },
-        startDate,
-      });
-      if (duplicate) {
-        return apiResponse.error(
-          res,
-          409,
-          "You have already applied for this Floating Holiday"
-        );
-      }
-
-      const usedCount = await countFloatingRequests(req.user._id, year);
-      if (usedCount >= LEAVE_ENTITLEMENTS.FLOATING_HOLIDAY) {
-        return apiResponse.error(
-          res,
-          409,
-          `You have used all ${LEAVE_ENTITLEMENTS.FLOATING_HOLIDAY} Floating Holidays for ${year}.`
-        );
-      }
-    }
+    // Quietly map Floating Holiday to Casual Leave type without altering schema
+    const normalizedLeaveType =
+      leaveType === "Floating Holiday" || leaveType === "Floating"
+        ? "Casual"
+        : (leaveType || "Casual");
 
     const leave = await Leave.create({
       employee: req.user._id,
-      leaveType: leaveType || "Casual",
+      leaveType: normalizedLeaveType,
       startDate,
       endDate,
       reason: reason.trim(),
@@ -156,29 +101,6 @@ const updateLeaveStatus = async (req, res) => {
       return apiResponse.error(res, 404, "Leave request not found");
     }
 
-    // Enforce the annual Floating Holiday limit at approval time (pending
-    // requests may have been approved elsewhere in the meantime)
-    if (
-      status === "approved" &&
-      leave.leaveType === LEAVE_TYPES.FLOATING_HOLIDAY &&
-      leave.status !== "approved"
-    ) {
-      const year = Number(leave.startDate.split("-")[0]);
-      const alreadyApproved = await Leave.countDocuments({
-        employee: leave.employee,
-        _id: { $ne: leave._id },
-        leaveType: LEAVE_TYPES.FLOATING_HOLIDAY,
-        status: "approved",
-        startDate: { $gte: `${year}-01-01`, $lte: `${year}-12-31` },
-      });
-      if (alreadyApproved >= LEAVE_ENTITLEMENTS.FLOATING_HOLIDAY) {
-        return apiResponse.error(
-          res,
-          409,
-          `Cannot approve: the employee has already used all ${LEAVE_ENTITLEMENTS.FLOATING_HOLIDAY} Floating Holidays for ${year}.`
-        );
-      }
-    }
 
     leave.status = status;
     leave.reviewedBy = req.user._id;
@@ -218,58 +140,29 @@ const getLeaveBalance = async (req, res) => {
     const yearStart = `${year}-01-01`;
     const yearEnd = `${year}-12-31`;
 
-    const [approvedLeaves, pendingFloating] = await Promise.all([
-      Leave.find({
-        employee: req.user._id,
-        status: "approved",
-        startDate: { $gte: yearStart, $lte: yearEnd },
-      }),
-      Leave.countDocuments({
-        employee: req.user._id,
-        leaveType: LEAVE_TYPES.FLOATING_HOLIDAY,
-        status: "pending",
-        startDate: { $gte: yearStart, $lte: yearEnd },
-      }),
-    ]);
+    const approvedLeaves = await Leave.find({
+      employee: req.user._id,
+      status: "approved",
+      startDate: { $gte: yearStart, $lte: yearEnd },
+    });
 
     // Used days per type, counting only the portion inside this calendar year
-    const usedByType = {};
-    for (const type of Object.keys(LEAVE_ENTITLEMENTS)) {
-      usedByType[type] = 0;
-    }
+    // Combined pool — Casual and Sick both draw from the same annual quota
+    let used = 0;
     for (const leave of approvedLeaves) {
-      if (usedByType[leave.leaveType] === undefined) continue;
-      usedByType[leave.leaveType] += countDaysInYear(
-        leave.startDate,
-        leave.endDate,
-        year
-      );
+      used += countDaysInYear(leave.startDate, leave.endDate, year);
     }
 
-    const buildSummary = (type) => {
-      const entitlement = LEAVE_ENTITLEMENTS[type];
-      const used = usedByType[type] ?? 0;
-      return {
-        entitlement,
-        used,
-        available: Math.max(entitlement - used, 0),
-      };
-    };
-
-    const earnedLeave = buildSummary(LEAVE_TYPES.EARNED);
-    const sickLeave = buildSummary(LEAVE_TYPES.SICK);
-    const floatingHoliday = {
-      ...buildSummary(LEAVE_TYPES.FLOATING_HOLIDAY),
-      pending: pendingFloating,
-    };
+    const entitlement = LEAVE_ENTITLEMENTS.TOTAL;
+    const available = Math.max(entitlement - used, 0);
 
     return apiResponse.success(res, 200, "Leave balance fetched", {
       year,
-      earnedLeave,
-      sickLeave,
-      floatingHoliday,
-      totalUsed: earnedLeave.used + sickLeave.used + floatingHoliday.used,
+      entitlement,
+      used,
+      available,
     });
+
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }

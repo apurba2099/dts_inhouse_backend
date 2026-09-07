@@ -38,10 +38,29 @@ const projectLogSchema = new mongoose.Schema(
       max: 24,
       default: 1,
     },
+    startDate: {
+      type: String,
+    },
+    dueDate: {
+      type: String,
+    },
+    priority: {
+      type: String,
+      enum: ["High", "Medium", "Low"],
+      default: "Medium",
+    },
     status: {
       type: String,
-      enum: ["Yet to Start", "In Progress", "Complete", "Cancelled"],
+      enum: ["Yet to Start", "In Progress", "Complete", "Cancelled", "Canceled"],
       default: "In Progress",
+    },
+    department: {
+      type: String,
+      default: "",
+    },
+    color: {
+      type: String,
+      default: "blue",
     },
   },
   { timestamps: true }

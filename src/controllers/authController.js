@@ -147,16 +147,14 @@ const getMyProfile = async (req, res) => {
   }
 };
 
-// Update own profile (name, phone, nickname, biography)
+// Update own profile (name, phone, nickname)
 const updateMyProfile = async (req, res) => {
   try {
-    const { name, phone, nickname, biography } = req.body;
+    const { name, phone, nickname } = req.body;
     const user = await User.findById(req.user._id);
 
     if (name !== undefined) user.name = name;
     if (phone !== undefined) user.phone = phone;
-    if (nickname !== undefined) user.nickname = nickname;
-    if (biography !== undefined) user.biography = biography;
 
     await user.save();
     return apiResponse.success(res, 200, "Profile updated", user);
@@ -231,6 +229,14 @@ const updateEmployee = async (req, res) => {
     }
 
     Object.assign(employee, updates);
+
+    // Update password if a new non-empty password is provided
+    if (password && typeof password === "string" && password.trim()) {
+      if (password.trim().length < 8) {
+        return apiResponse.error(res, 400, "Password must be at least 8 characters");
+      }
+      employee.password = password.trim();
+    }
 
     await employee.save();
     return apiResponse.success(res, 200, "Employee updated successfully", employee);

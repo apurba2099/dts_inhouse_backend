@@ -1,12 +1,15 @@
-const DailyLog = require("../models/DailyLog");
+const mongoose = require("mongoose");
+const ProjectLog = require("../models/ProjectLog");
+const Project = require("../models/Project");
 const User = require("../models/User");
 const apiResponse = require("../utils/apiResponse");
 
-// Employee or Admin: Create a new Daily Log
+// Employee or Admin: Create a new Daily Log (stored in ProjectLog)
 const createDailyLog = async (req, res) => {
   try {
     const {
       project,
+      projectId,
       description,
       actualHours,
       startDate,
@@ -16,10 +19,37 @@ const createDailyLog = async (req, res) => {
       department,
       employeeId,
       color,
+      date,
     } = req.body;
 
-    if (!project || !description) {
-      return apiResponse.error(res, 400, "Project and description are required");
+    if (!description || !description.trim()) {
+      return apiResponse.error(res, 400, "Description is required");
+    }
+
+    // Resolve target Project
+    let targetProject = null;
+    const targetProjId = projectId || (project && mongoose.Types.ObjectId.isValid(project) ? project : null);
+    if (targetProjId) {
+      targetProject = await Project.findById(targetProjId);
+    }
+
+    if (!targetProject && project && typeof project === "string") {
+      targetProject = await Project.findOne({
+        name: { $regex: new RegExp("^" + project.trim() + "$", "i") },
+      });
+    }
+
+    if (!targetProject) {
+      // Pick first active project or create one if none exists
+      targetProject = await Project.findOne({ isActive: true });
+      if (!targetProject) {
+        targetProject = await Project.create({
+          name: (project && project.trim()) || "General Project",
+          description: "Default Project",
+          members: [req.user._id],
+          createdBy: req.user._id,
+        });
+      }
     }
 
     let targetEmployee = req.user;
@@ -30,36 +60,47 @@ const createDailyLog = async (req, res) => {
       }
     }
 
-    const log = await DailyLog.create({
+    const logDate = date || startDate || new Date().toISOString().split("T")[0];
+
+    const log = await ProjectLog.create({
+      project: targetProject._id,
+      projectName: targetProject.name,
       employee: targetEmployee._id,
       employeeName: targetEmployee.name,
       color: color || "blue",
-      project: project.trim(),
       description: description.trim(),
       actualHours: Number(actualHours) || 8,
-      startDate: startDate || new Date().toISOString().split("T")[0],
-      dueDate: dueDate || new Date().toISOString().split("T")[0],
+      date: logDate,
+      startDate: startDate || logDate,
+      dueDate: dueDate || logDate,
       priority: priority || "High",
       status: status || "Complete",
       department: department || targetEmployee.department || "Engineering",
     });
 
-    const populated = await DailyLog.findById(log._id).populate(
-      "employee",
-      "name email employeeId department designation"
-    );
+    const populated = await ProjectLog.findById(log._id)
+      .populate("employee", "name email employeeId department designation")
+      .populate("project", "name description");
 
-    return apiResponse.success(res, 201, "Daily log created successfully", populated || log);
+    const result = populated ? populated.toObject() : log.toObject();
+    result.project = result.projectName || result.project?.name;
+
+    return apiResponse.success(res, 201, "Daily log created successfully", result);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }
 };
 
-// Get Daily Logs with filters
+// Get Daily Logs with filters (from single ProjectLog table)
 const getDailyLogs = async (req, res) => {
   try {
-    const { from, to, department, employeeId, priority, status, search } = req.query;
+    const { from, to, department, employeeId, employeeName, priority, status, search, projectId } =
+      req.query;
     const filter = {};
+
+    if (projectId && projectId !== "All") {
+      filter.project = projectId;
+    }
 
     if (department && department !== "All Departments") {
       filter.department = department;
@@ -67,6 +108,10 @@ const getDailyLogs = async (req, res) => {
 
     if (employeeId && employeeId !== "All Employees") {
       filter.employee = employeeId;
+    }
+
+    if (employeeName && employeeName !== "All Employees") {
+      filter.employeeName = employeeName;
     }
 
     if (priority && priority !== "All Priority") {
@@ -78,22 +123,48 @@ const getDailyLogs = async (req, res) => {
     }
 
     if (from && to) {
-      filter.startDate = { $gte: from, $lte: to };
+      filter.$or = [
+        { startDate: { $gte: from, $lte: to } },
+        { date: { $gte: from, $lte: to } },
+      ];
+    } else if (from) {
+      filter.$or = [{ startDate: { $gte: from } }, { date: { $gte: from } }];
+    } else if (to) {
+      filter.$or = [{ startDate: { $lte: to } }, { date: { $lte: to } }];
     }
 
     if (search && search.trim()) {
       const regex = new RegExp(search.trim(), "i");
-      filter.$or = [
+      const searchConditions = [
         { employeeName: regex },
-        { project: regex },
+        { projectName: regex },
         { description: regex },
         { department: regex },
       ];
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, { $or: searchConditions }];
+        delete filter.$or;
+      } else {
+        filter.$or = searchConditions;
+      }
     }
 
-    const logs = await DailyLog.find(filter)
+    const rawLogs = await ProjectLog.find(filter)
       .populate("employee", "name email employeeId department designation")
-      .sort({ createdAt: 1 });
+      .populate("project", "name description")
+      .sort({ createdAt: -1 });
+
+    // Ensure format matches frontend expectations
+    const logs = rawLogs.map((logDoc) => {
+      const l = logDoc.toObject();
+      return {
+        ...l,
+        startDate: l.startDate || l.date,
+        dueDate: l.dueDate || l.date,
+        priority: l.priority || "Medium",
+        project: l.projectName || (l.project && l.project.name) || "",
+      };
+    });
 
     return apiResponse.success(res, 200, "Daily logs fetched successfully", logs);
   } catch (err) {
@@ -104,9 +175,21 @@ const getDailyLogs = async (req, res) => {
 // Get current user's daily logs
 const getMyDailyLogs = async (req, res) => {
   try {
-    const logs = await DailyLog.find({ employee: req.user._id }).sort({
-      createdAt: 1,
+    const rawLogs = await ProjectLog.find({ employee: req.user._id })
+      .populate("project", "name description")
+      .sort({ createdAt: -1 });
+
+    const logs = rawLogs.map((logDoc) => {
+      const l = logDoc.toObject();
+      return {
+        ...l,
+        startDate: l.startDate || l.date,
+        dueDate: l.dueDate || l.date,
+        priority: l.priority || "Medium",
+        project: l.projectName || (l.project && l.project.name) || "",
+      };
     });
+
     return apiResponse.success(res, 200, "My daily logs fetched successfully", logs);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
@@ -116,7 +199,7 @@ const getMyDailyLogs = async (req, res) => {
 // Update a daily log
 const updateDailyLog = async (req, res) => {
   try {
-    const log = await DailyLog.findById(req.params.id);
+    const log = await ProjectLog.findById(req.params.id);
     if (!log) {
       return apiResponse.error(res, 404, "Daily log not found");
     }
@@ -125,21 +208,56 @@ const updateDailyLog = async (req, res) => {
       return apiResponse.error(res, 403, "Not authorized to update this log");
     }
 
-    const { employeeName, project, description, actualHours, startDate, dueDate, priority, status, department } =
-      req.body;
+    const {
+      employeeName,
+      project,
+      projectId,
+      description,
+      actualHours,
+      startDate,
+      dueDate,
+      priority,
+      status,
+      department,
+      date,
+    } = req.body;
 
     if (employeeName !== undefined) log.employeeName = employeeName;
-    if (project !== undefined) log.project = project;
-    if (description !== undefined) log.description = description;
+    if (description !== undefined) log.description = description.trim();
     if (actualHours !== undefined) log.actualHours = Number(actualHours);
     if (startDate !== undefined) log.startDate = startDate;
     if (dueDate !== undefined) log.dueDate = dueDate;
+    if (date !== undefined) log.date = date;
     if (priority !== undefined) log.priority = priority;
     if (status !== undefined) log.status = status;
     if (department !== undefined) log.department = department;
 
+    if (projectId) {
+      const foundProject = await Project.findById(projectId);
+      if (foundProject) {
+        log.project = foundProject._id;
+        log.projectName = foundProject.name;
+      }
+    } else if (project !== undefined && project !== log.projectName) {
+      log.projectName = project;
+      const foundProject = await Project.findOne({
+        name: { $regex: new RegExp("^" + project.trim() + "$", "i") },
+      });
+      if (foundProject) {
+        log.project = foundProject._id;
+      }
+    }
+
     await log.save();
-    return apiResponse.success(res, 200, "Daily log updated successfully", log);
+
+    const populated = await ProjectLog.findById(log._id)
+      .populate("employee", "name email employeeId department designation")
+      .populate("project", "name description");
+
+    const result = populated ? populated.toObject() : log.toObject();
+    result.project = result.projectName || result.project?.name;
+
+    return apiResponse.success(res, 200, "Daily log updated successfully", result);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);
   }
@@ -148,7 +266,7 @@ const updateDailyLog = async (req, res) => {
 // Delete a daily log
 const deleteDailyLog = async (req, res) => {
   try {
-    const log = await DailyLog.findById(req.params.id);
+    const log = await ProjectLog.findById(req.params.id);
     if (!log) {
       return apiResponse.error(res, 404, "Daily log not found");
     }
@@ -157,7 +275,7 @@ const deleteDailyLog = async (req, res) => {
       return apiResponse.error(res, 403, "Not authorized to delete this log");
     }
 
-    await DailyLog.findByIdAndDelete(req.params.id);
+    await ProjectLog.findByIdAndDelete(req.params.id);
     return apiResponse.success(res, 200, "Daily log deleted successfully", null);
   } catch (err) {
     return apiResponse.error(res, 500, err.message);

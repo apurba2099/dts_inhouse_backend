@@ -48,15 +48,6 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    nickname: {
-      type: String,
-      default: "",
-    },
-    biography: {
-      type: String,
-      default: "",
-      maxlength: 300,
-    },
     profilePicture: {
       type: String,
       default: "",
